@@ -50,3 +50,23 @@ PHP 实现的 VLESS XHTTP，支持虚拟主机
 - 不检查 VLESS UUID。建议把程序放到一个复杂的目录名下。
 - UDP 只支持 53 端口的 DNS。
 - netcup webhosting 好像有一些问题，~~懒得修了~~
+
+## 开发
+
+1. 运行 `docker compose up`
+2. Vscode 配置
+
+```
+{
+    "version": "0.2.0",
+    "configurations": [
+
+        {
+            "name": "Listen for Xdebug",
+            "type": "php",
+            "request": "launch",
+            "port": 9003
+        }
+    ]
+}
+```
