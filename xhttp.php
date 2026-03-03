@@ -1,43 +1,29 @@
 <?php
 
-//$log = fopen(__DIR__ . "/xhttp.log", 'a');
-$log = fopen('/dev/null', 'w');
+/*
+Copyright (C) 2026 duoduo
 
-function hex_dump($data, $newline="\n")
-{
-    global $log;
-    static $from = '';
-    static $to = '';
-    
-    static $width = 16; # number of bytes per line
-    
-    static $pad = '.'; # padding for non-visible characters
-    
-    if ($from==='')
-    {
-        for ($i=0; $i<=0xFF; $i++)
-        {
-        $from .= chr($i);
-        $to .= ($i >= 0x20 && $i <= 0x7E) ? chr($i) : $pad;
-        }
-    }
-    
-    $hex = str_split(bin2hex($data), $width*2);
-    $chars = str_split(strtr($data, $from, $to), $width);
-    
-    $offset = 0;
-    foreach ($hex as $i => $line)
-    {
-        fprintf($log, "%s", sprintf('%6X',$offset). ' : ' .implode(' ', str_split($line,2)) . ' [' . $chars[$i] . ']' . $newline);
-        fflush($log);
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as published by
+the Free Software Foundation, version 3 of the License.
 
-        $offset += $width;
-    }
-}
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program.  If not, see <https://www.gnu.org/licenses/>.
+*/
+
+require_once __DIR__ . "/common.php";
+
+// $log = fopen(__DIR__ . "/xhttp.log", 'a');
+$log = fopen('php://memory', 'w');
+
 
 // unix socket
-$socket_path = realpath(__DIR__ . "/../xhttp.sock");
-fprintf($log, "socket path: %s\n", __DIR__ . "/../xhttp.sock");
+$socket_path = realpath(__DIR__ . "/xhttp.sock");
 fprintf($log, "socket path: %s\n", $socket_path);
 fflush($log);
 
@@ -77,7 +63,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     // forward entire body to socket
     $data = file_get_contents('php://input');
-    hex_dump($data);
+    hex_dump($data, $log);
     fwrite($socket, $data);
     fflush($socket);
 
@@ -99,9 +85,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if (!$data) {
             break;
         }
-        hex_dump($data);
+        hex_dump($data, $log);
         echo $data;
         flush();
     }
 
 }
+
+fflush($log);

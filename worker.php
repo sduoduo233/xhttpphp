@@ -1,53 +1,32 @@
 <?php
 
-function ob_callback($buffer) {
-    // $log = fopen(__DIR__ . "/worker.log", "a");
-    // fprintf($log, "Output: %s\n", $buffer);
-    // fclose($log);
-    // return $buffer;
-    return "";
-}
-ob_start('ob_callback');
-ob_implicit_flush(true);
+/*
+Copyright (C) 2026 duoduo
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as published by
+the Free Software Foundation, version 3 of the License.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program.  If not, see <https://www.gnu.org/licenses/>.
+*/
+
+// $log = fopen(__DIR__ . "/worker.log", 'a');
+$log = fopen('php://memory', 'w');
+
+require_once __DIR__ . "/common.php";
 
 header('X-Accel-Buffering: no');
 
-function hex_dump($data, $newline="\n")
-{
-    return; // disable hex dump
-
-    static $from = '';
-    static $to = '';
-    
-    static $width = 16; # number of bytes per line
-    
-    static $pad = '.'; # padding for non-visible characters
-    
-    if ($from==='')
-    {
-        for ($i=0; $i<=0xFF; $i++)
-        {
-        $from .= chr($i);
-        $to .= ($i >= 0x20 && $i <= 0x7E) ? chr($i) : $pad;
-        }
-    }
-    
-    $hex = str_split(bin2hex($data), $width*2);
-    $chars = str_split(strtr($data, $from, $to), $width);
-    
-    $offset = 0;
-    foreach ($hex as $i => $line)
-    {
-        printf("%s", sprintf('%6X',$offset). ' : ' .implode(' ', str_split($line,2)) . ' [' . $chars[$i] . ']' . $newline);
-
-        $offset += $width;
-    }
-}
-
 $start_time = time();
 $worker_timeout = 58;
-echo "worker started\n";
-echo $start_time . "\n";
+fprintf($log, "worker started\n");
+fprintf($log, $start_time . "\n");
 
 // start unix socket server
 $socket_path = __DIR__ . "/xhttp.sock";
@@ -62,10 +41,12 @@ if (!$socket) {
 
 function cleanup() {
     global $socket_path;
+    global $log;
+    fprintf($log, "cleanup\n");
     if (file_exists($socket_path)) {
         unlink($socket_path);
     }
-    ob_end_flush();
+    fflush($log);
 }
 register_shutdown_function('cleanup');
 
@@ -84,6 +65,8 @@ class VlessSession {
     public $down_buffer = ""; // ready to be written to vless client
     public $state = VLESS_STATE_HANDSHAKE;
     public $remote_socket = null;
+    public $remote_closed = false; // true when remote TCP socket has closed
+    public $remote_closed_time = 0; // timestamp when remote_closed was set
     public $client_down_socket = null; // downlink to vless client
     public $client_up_sockets = array(); // uplink from vless client. seq => socket
 
@@ -109,7 +92,8 @@ function read_full($socket, $length) {
 
 function delete_session($uuid) {
     global $sessions;
-    echo "delete session " . $uuid . "\n";
+    global $log;
+    fprintf($log, "delete session %s\n", $uuid);
     if (isset($sessions[$uuid])) {
         $session = $sessions[$uuid];
         // close session
@@ -148,18 +132,18 @@ while (true) {
     }
     
 
+    // timeout
+    if (time() - $start_time > $worker_timeout) {
+        fprintf($log, "worker timeout\n");
+        exit;
+    }
+
     $ready = stream_select($read, $write, $except, 1);
     if ($ready === false) {
-        printf("stream_select failed\n");
+        fprintf($log, "stream_select failed\n");
         break;
     }
     if ($ready === 0) {
-        // timeout
-        echo "working...\n";
-        if (time() - $start_time > $worker_timeout) {
-            printf("worker timeout\n");
-            exit;
-        }
         continue;
     }
 
@@ -168,7 +152,7 @@ while (true) {
         // ready to accept
         if ($s === $socket) {
 
-            echo "socket accepted\n";
+            fprintf($log, "socket accepted\n");
 
             $accepted = stream_socket_accept($socket);
             stream_set_blocking($accepted, 1);
@@ -183,7 +167,7 @@ while (true) {
 
             // find vless session
             if (!isset($sessions[$uuid])) {
-                echo "new session " . $uuid . "\n";
+                fprintf($log, "new session %s\n", $uuid);
                 $sessions[$uuid] = new VlessSession();
             }
             $session = $sessions[$uuid];
@@ -192,7 +176,7 @@ while (true) {
             if (str_starts_with($buf, "GET_")) {
 
 
-                echo "GET " . $uuid . "\n";
+                fprintf($log, "GET %s\n", $uuid);
                 
                 // attach client down socket to session
                 stream_set_blocking($accepted, 0);
@@ -208,7 +192,7 @@ while (true) {
                 }
                 $seq = intval($seq);
 
-                echo "POST " . $uuid .  " seq=" . $seq . "\n";
+                fprintf($log, "POST %s seq=%d\n", $uuid, $seq);
 
                 // attach client up socket to session
                 stream_set_blocking($accepted, 0);
@@ -224,7 +208,7 @@ while (true) {
         foreach ($sessions as $uuid => $session) {
             foreach ($session->client_up_sockets as $seq => $client_up_socket) {
                 if ($s === $client_up_socket) {
-                    echo "read from uplink " . $uuid . " seq=" . $seq . "\n";
+                    fprintf($log, "read from uplink %s seq=%d\n", $uuid, $seq);
                     $data = fread($client_up_socket, 4096);
                     if ($data === false || strlen($data) === 0) {
                         // EOF or error
@@ -245,14 +229,14 @@ while (true) {
         // ready to read from remote
         foreach ($sessions as $uuid => $session) {
             if ($session->remote_socket !== null && $s === $session->remote_socket) {
-                echo "read from remote " . $uuid . "\n";
+                fprintf($log, "read from remote %s\n", $uuid);
                 $data = fread($session->remote_socket, 4096);
                 if ($data === false || strlen($data) === 0) {
                     // EOF or error
                     delete_session($uuid);
                     continue;
                 }
-                hex_dump($data);
+                hex_dump($data, $log);
                 $session->down_buffer .= $data;
             }
         }
@@ -265,8 +249,8 @@ while (true) {
         foreach ($sessions as $uuid => $session) {
             if ($session->client_down_socket !== null && $s === $session->client_down_socket) {
                 if (strlen($session->down_buffer) > 0) {
-                    echo "write to downlink " . $uuid . "\n";
-                    hex_dump($session->down_buffer);
+                    fprintf($log, "write to downlink %s\n", $uuid);
+                    hex_dump($session->down_buffer, $log);
                     $written = fwrite($session->client_down_socket, $session->down_buffer);
                     if ($written === false) {
                         // error
@@ -283,13 +267,13 @@ while (true) {
         foreach ($sessions as $uuid => $session) {
             if ($session->remote_socket !== null && $s === $session->remote_socket) {
                 if ($session->state === VLESS_STATE_DIAL_REMOTE) {
-                    echo "connected to remote " . $uuid . "\n";
+                    fprintf($log, "connected to remote %s\n", $uuid);
                     $session->state = VLESS_STATE_COPYING;
                 }
                 if ($session->state === VLESS_STATE_COPYING) {
                     if (strlen($session->up_buffer) > 0) {
-                        echo "write to remote " . $uuid . "\n";
-                        hex_dump($session->up_buffer);
+                        fprintf($log, "write to remote %s\n", $uuid);
+                        hex_dump($session->up_buffer, $log);
                         $written = fwrite($session->remote_socket, $session->up_buffer);
                         if ($written === null) {
                             // error
@@ -306,9 +290,9 @@ while (true) {
     foreach ($sessions as $uuid => $session) {
         // copy ready uplink buffers to $up_buffer
         for ($seq = $session->up_buffer_seq; isset($session->up_buffers_complete[$seq]) && $session->up_buffers_complete[$seq]; $seq++) {
-            echo "copy seq " . $seq . " to up_buffer " . $uuid . "\n";
+            fprintf($log, "copy seq %d to up_buffer %s\n", $seq, $uuid);
             if (isset($session->up_buffers[$seq])) {
-                hex_dump($session->up_buffers[$seq]);
+                hex_dump($session->up_buffers[$seq], $log);
                 $session->up_buffer .= $session->up_buffers[$seq];
                 unset($session->up_buffers[$seq]);
             }
@@ -378,7 +362,24 @@ while (true) {
                 continue;
             }
 
-            echo "handshake " . $uuid . " command=" . $vless_command . " addr=" . $vless_addr . " port=" . $vless_port . " handshake_length=" . $handshake_length . "\n";
+            fprintf($log, "handshake %s command=%d addr=%s port=%d handshake_length=%d\n", $uuid, $vless_command, $vless_addr, $vless_port, $handshake_length);
+            fflush($log);
+
+            if ($vless_command === 2) { // udp
+                if ($vless_port !== 53) {
+                    // only support dns udp for now
+                    fprintf($log, "unsupported udp command %s port=%d\n", $uuid, $vless_port);
+                    fflush($log);
+                    delete_session($uuid);
+                    continue;
+                } else {
+                    // rewrite to tcp dns
+                    $vless_addr = "8.8.8.8";
+                    $vless_port = 53;
+                    fprintf($log, "rewrite to tcp dns %s command=%d addr=%s port=%d handshake_length=%d\n", $uuid, $vless_command, $vless_addr, $vless_port, $handshake_length);
+                    fflush($log);
+                }
+            }
 
             $session->up_buffer = substr($session->up_buffer, $handshake_length);
             $session->state = VLESS_STATE_DIAL_REMOTE;

@@ -1,3 +1,5 @@
 .vscode
 config.json
 xray
+*.log
+release.zip
