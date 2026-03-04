@@ -31,7 +31,17 @@ fprintf($log, $start_time . "\n");
 // start unix socket server
 $socket_path = __DIR__ . "/xhttp.sock";
 
-if (file_exists($socket_path)) exit;
+if (file_exists($socket_path)) {
+    // Check whether a live worker already owns this socket
+    $test = @stream_socket_client('unix://' . $socket_path, $errno, $errstr, 1);
+    if ($test !== false) {
+        // Another worker is alive — exit gracefully
+        fclose($test);
+        exit;
+    }
+    // Socket file is stale (crashed worker) — remove it and continue
+    unlink($socket_path);
+}
 
 $socket = stream_socket_server('unix://' . $socket_path, $errno, $errstr);
 if (!$socket) {
@@ -55,6 +65,7 @@ stream_set_blocking($socket, 0);
 const VLESS_STATE_HANDSHAKE = 0;
 const VLESS_STATE_DIAL_REMOTE = 1;
 const VLESS_STATE_COPYING = 2;
+const REMOTE_CLOSE_GRACE_SECONDS = 10;
 
 class VlessSession {
     public $up_buffer = "";
@@ -232,8 +243,11 @@ while (true) {
                 fprintf($log, "read from remote %s\n", $uuid);
                 $data = fread($session->remote_socket, 4096);
                 if ($data === false || strlen($data) === 0) {
-                    // EOF or error
-                    delete_session($uuid);
+                    // EOF or error — half-close: stop reading remote but keep flushing down_buffer
+                    fclose($session->remote_socket);
+                    $session->remote_socket = null;
+                    $session->remote_closed = true;
+                    $session->remote_closed_time = time();
                     continue;
                 }
                 hex_dump($data, $log);
@@ -275,7 +289,7 @@ while (true) {
                         fprintf($log, "write to remote %s\n", $uuid);
                         hex_dump($session->up_buffer, $log);
                         $written = fwrite($session->remote_socket, $session->up_buffer);
-                        if ($written === null) {
+                        if ($written === false) {
                             // error
                             delete_session($uuid);
                             continue;
@@ -304,6 +318,13 @@ while (true) {
         // timeout
         if (time() - $session->up_buffer_last_copy > 30) {
             delete_session($uuid);
+            continue;
+        }
+        // graceful shutdown: remote closed, wait until down_buffer is flushed or grace period expires
+        if ($session->remote_closed) {
+            if (strlen($session->down_buffer) === 0 || time() - $session->remote_closed_time > REMOTE_CLOSE_GRACE_SECONDS) {
+                delete_session($uuid);
+            }
         }
     }
 
