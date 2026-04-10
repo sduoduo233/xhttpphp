@@ -16,20 +16,17 @@ You should have received a copy of the GNU Affero General Public License
 along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
+require_once __DIR__ . "/logging.php";
 require_once __DIR__ . "/common.php";
-
-// $log = fopen(__DIR__ . "/xhttp.log", 'a');
-$log = fopen('php://memory', 'w');
 
 
 // unix socket
 $socket_path = realpath(__DIR__ . "/xhttp.sock");
-fprintf($log, "socket path: %s\n", $socket_path);
-fflush($log);
+logf("socket path: %s\n", $socket_path);
 
 // match for {uuid}/{optional seq}
 if (!preg_match('/([0-9a-fA-F]{8}-[0-9A-Fa-f]{4}-4[0-9A-Fa-f]{3}-[89ABab][0-9a-fA-F]{3}-[0-9a-fA-F]{12})\/?(\d*)/', $_SERVER['REQUEST_URI'], $matches)) {
-    fprintf($log, "Invalid request URI: %s\n", $_SERVER['REQUEST_URI']);
+    logf("Invalid request URI: %s\n", $_SERVER['REQUEST_URI']);
     http_response_code(404);
     exit;
 }
@@ -37,15 +34,14 @@ $uuid = $matches[1];
 $seq = $matches[2];
 if (!$seq) $seq = 0;
 
-fprintf($log, "UUID = %s, Method = %s, Seq = %s\n", $uuid, $_SERVER['REQUEST_METHOD'], $seq);
+logf("UUID = %s, Method = %s, Seq = %s\n", $uuid, $_SERVER['REQUEST_METHOD'], $seq);
 
 
 // connect to unix socket
 $socket = stream_socket_client('unix://' . $socket_path, $errno, $errstr);
 if (!$socket) {
     http_response_code(500);
-    fprintf($log, "Failed to connect to socket: %s\n", $errstr);
-    fflush($log);
+    logf("Failed to connect to socket: %s\n", $errstr);
     exit;
 }
 
@@ -63,7 +59,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     // forward entire body to socket
     $data = file_get_contents('php://input');
-    hex_dump($data, $log);
+    hex_dump($data);
     fwrite($socket, $data);
     fflush($socket);
 
@@ -85,11 +81,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if (!$data) {
             break;
         }
-        hex_dump($data, $log);
+        hex_dump($data);
         echo $data;
         flush();
     }
 
 }
-
-fflush($log);

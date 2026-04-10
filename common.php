@@ -18,7 +18,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 
 
-function hex_dump($data, $log)
+function hex_dump($data)
 {
     return;
     
@@ -44,11 +44,8 @@ function hex_dump($data, $log)
     $offset = 0;
     foreach ($hex as $i => $line)
     {
-        fprintf($log, "%s", sprintf('%6X',$offset). ' : ' .implode(' ', str_split($line,2)) . ' [' . $chars[$i] . ']' . "\n");
-        fflush($log);
+        logf("%s", sprintf('%6X',$offset). ' : ' .implode(' ', str_split($line,2)) . ' [' . $chars[$i] . ']' . "\n");
 
         $offset += $width;
     }
-
-    fflush($log);
 }
