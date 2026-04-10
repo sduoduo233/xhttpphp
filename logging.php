@@ -22,6 +22,12 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 define("LOGGING_MODE", "stderr");
 
 
+function request_id(): int {
+    static $id = 0;
+    if ($id === 0) $id = rand(1, 1000000);
+    return $id;
+}
+
 function logf(string $format, mixed ...$args): void {
     static $stderr = null;
     if ($stderr === null) $stderr = fopen('php://stderr', 'w');
@@ -29,7 +35,10 @@ function logf(string $format, mixed ...$args): void {
     $mode = defined('LOGGING_MODE') ? LOGGING_MODE : 'discard';
     if ($mode === 'discard') return;
 
-    $message = sprintf($format, ...$args);
+    $caller = debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS, 1)[0];
+    $location = basename($caller['file']) . ':' . $caller['line'];
+    $ts = sprintf('%.3f', microtime(true));
+    $message = $ts . ' [' . request_id() . '] ' . $location . ' ' . sprintf($format, ...$args);
 
     if ($mode === 'stderr') {
         fwrite($stderr, $message);

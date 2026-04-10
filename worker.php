@@ -53,6 +53,7 @@ const VLESS_STATE_DIAL_REMOTE = 1;
 const VLESS_STATE_COPYING = 2;
 
 class VlessSession {
+    public int $id;
     public $up_buffer = "";
     public $up_buffer_seq = 0; // points to the next sequence number expected from client uplink
     public $up_buffer_last_copy = 0; // timestamp of last copy to remote. default to time of session creation
@@ -67,6 +68,7 @@ class VlessSession {
     public $client_up_sockets = array(); // uplink from vless client. seq => socket
 
     public function __construct() {
+        $this->id = rand(1, 1000000);
         $this->up_buffer_last_copy = time();
     }
 }
@@ -86,9 +88,9 @@ function read_full($socket, $length) {
     return $buf;
 }
 
-function delete_session($uuid) {
+function delete_session($uuid, $reason = 'unknown') {
     global $sessions;
-    logf("delete session %s\n", $uuid);
+    logf("delete session %s reason=%s\n", $uuid, $reason);
     if (isset($sessions[$uuid])) {
         $session = $sessions[$uuid];
         // close session
@@ -114,7 +116,7 @@ while (true) {
 
     array_push($read, $socket); // listen for accept
     foreach ($sessions as $uuid => $session) {
-        if ($session->client_down_socket !== null) {
+        if ($session->client_down_socket !== null && strlen($session->down_buffer) > 0) {
             array_push($write, $session->client_down_socket);
         }
         foreach ($session->client_up_sockets as $seq => $s) {
@@ -122,7 +124,9 @@ while (true) {
         }
         if ($session->remote_socket !== null) {
             array_push($read, $session->remote_socket);
-            array_push($write, $session->remote_socket);
+            if (strlen($session->up_buffer) > 0 || $session->state === VLESS_STATE_DIAL_REMOTE) {
+                array_push($write, $session->remote_socket);
+            }
         }
     }
     
@@ -162,8 +166,8 @@ while (true) {
 
             // find vless session
             if (!isset($sessions[$uuid])) {
-                logf("new session %s\n", $uuid);
                 $sessions[$uuid] = new VlessSession();
+                logf("new session %s id=%d\n", $uuid, $sessions[$uuid]->id);
             }
             $session = $sessions[$uuid];
 
@@ -233,7 +237,7 @@ while (true) {
                     fclose($session->remote_socket);
                     $session->remote_socket = null;
                     if (strlen($session->down_buffer) === 0) {
-                        delete_session($uuid);
+                        delete_session($uuid, 'remote_closed_empty_downbuf');
                     }
                     continue;
                 }
@@ -255,10 +259,11 @@ while (true) {
                     $written = fwrite($session->client_down_socket, $session->down_buffer);
                     if ($written === false) {
                         // error
+                        logf("downlink write error %s\n", $uuid);
                         fclose($session->client_down_socket);
                         $session->client_down_socket = null;
                         if ($session->remote_closed) {
-                            delete_session($uuid);
+                            delete_session($uuid, 'downlink_write_error_remote_closed');
                         }
                         continue;
                     }
@@ -266,7 +271,7 @@ while (true) {
                 }
                 // down_buffer fully flushed — if remote already closed, session is done
                 if ($session->remote_closed && strlen($session->down_buffer) === 0) {
-                    delete_session($uuid);
+                    delete_session($uuid, 'downbuf_flushed_remote_closed');
                 }
             }
         }
@@ -283,9 +288,10 @@ while (true) {
                         logf("write to remote %s\n", $uuid);
                         hex_dump($session->up_buffer);
                         $written = fwrite($session->remote_socket, $session->up_buffer);
-                        if ($written === null) {
+                        if ($written === false) {
                             // error
-                            delete_session($uuid);
+                            logf("remote write error %s\n", $uuid);
+                            delete_session($uuid, 'remote_write_error');
                             continue;
                         }
                         $session->up_buffer = substr($session->up_buffer, $written);
@@ -311,11 +317,11 @@ while (true) {
         }
         // timeout
         if (time() - $session->up_buffer_last_copy > 30) {
-            delete_session($uuid);
+            delete_session($uuid, 'uplink_timeout');
         }
         // remote closed but down_buffer not drained within timeout (e.g. no downlink)
         if ($session->remote_closed && time() - $session->remote_closed_time > 30) {
-            delete_session($uuid);
+            delete_session($uuid, 'remote_closed_drain_timeout');
         }
     }
 
@@ -334,7 +340,8 @@ while (true) {
             $vless_uuid = substr($session->up_buffer, 1, 16);
             $vless_additional_data_length = unpack("C", substr($session->up_buffer, 17, 1))[1];
             if ($vless_version !== 0 || $vless_additional_data_length !== 0) {
-                delete_session($uuid);
+                logf("invalid vless handshake %s version=%d additional_data_length=%d\n", $uuid, $vless_version, $vless_additional_data_length);
+                delete_session($uuid, 'invalid_vless_handshake');
                 continue;
             }
             $handshake_length += 18;
@@ -370,7 +377,8 @@ while (true) {
                 $vless_addr = inet_ntop(substr($session->up_buffer, 22, 16));
                 $handshake_length += 16;
             } else {
-                delete_session($uuid);
+                logf("invalid vless addr_type %s type=%d\n", $uuid, $vless_addr_type);
+                delete_session($uuid, 'invalid_addr_type');
                 continue;
             }
 
@@ -380,7 +388,7 @@ while (true) {
                 if ($vless_port !== 53) {
                     // only support dns udp for now
                     logf("unsupported udp command %s port=%d\n", $uuid, $vless_port);
-                    delete_session($uuid);
+                    delete_session($uuid, 'unsupported_udp_port');
                     continue;
                 } else {
                     // rewrite to tcp dns
@@ -394,7 +402,8 @@ while (true) {
             $session->state = VLESS_STATE_DIAL_REMOTE;
             $remote_socket = stream_socket_client("tcp://" . $vless_addr . ":" . $vless_port, $errno, $errstr, 5, STREAM_CLIENT_CONNECT | STREAM_CLIENT_ASYNC_CONNECT);
             if (!$remote_socket) {
-                delete_session($uuid);
+                logf("failed to connect to remote %s addr=%s port=%d err=%s\n", $uuid, $vless_addr, $vless_port, $errstr);
+                delete_session($uuid, 'remote_connect_failed');
                 continue;
             }
             stream_set_blocking($remote_socket, 0);

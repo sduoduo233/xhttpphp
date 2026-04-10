@@ -26,7 +26,7 @@ logf("socket path: %s\n", $socket_path);
 
 // match for {uuid}/{optional seq}
 if (!preg_match('/([0-9a-fA-F]{8}-[0-9A-Fa-f]{4}-4[0-9A-Fa-f]{3}-[89ABab][0-9a-fA-F]{3}-[0-9a-fA-F]{12})\/?(\d*)/', $_SERVER['REQUEST_URI'], $matches)) {
-    logf("Invalid request URI: %s\n", $_SERVER['REQUEST_URI']);
+    logf("Invalid request URI: %s method=%s remote=%s\n", $_SERVER['REQUEST_URI'], $_SERVER['REQUEST_METHOD'], $_SERVER['REMOTE_ADDR'] ?? 'unknown');
     http_response_code(404);
     exit;
 }
@@ -41,7 +41,7 @@ logf("UUID = %s, Method = %s, Seq = %s\n", $uuid, $_SERVER['REQUEST_METHOD'], $s
 $socket = stream_socket_client('unix://' . $socket_path, $errno, $errstr);
 if (!$socket) {
     http_response_code(500);
-    logf("Failed to connect to socket: %s\n", $errstr);
+    logf("Failed to connect to socket: errno=%d err=%s uuid=%s\n", $errno, $errstr, $uuid);
     exit;
 }
 

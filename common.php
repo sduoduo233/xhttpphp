@@ -21,7 +21,6 @@ error_reporting(E_ALL);
 
 function hex_dump($data)
 {
-    return;
     
     static $from = '';
     static $to = '';
