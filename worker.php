@@ -227,8 +227,14 @@ while (true) {
                 logf("read from remote %s\n", $uuid);
                 $data = fread($session->remote_socket, 4096);
                 if ($data === false || strlen($data) === 0) {
-                    // EOF or error
-                    delete_session($uuid);
+                    // remote EOF or error — mark closed but keep session alive to flush down_buffer
+                    $session->remote_closed = true;
+                    $session->remote_closed_time = time();
+                    fclose($session->remote_socket);
+                    $session->remote_socket = null;
+                    if (strlen($session->down_buffer) === 0) {
+                        delete_session($uuid);
+                    }
                     continue;
                 }
                 hex_dump($data);
@@ -251,9 +257,16 @@ while (true) {
                         // error
                         fclose($session->client_down_socket);
                         $session->client_down_socket = null;
+                        if ($session->remote_closed) {
+                            delete_session($uuid);
+                        }
                         continue;
                     }
                     $session->down_buffer = substr($session->down_buffer, $written);
+                }
+                // down_buffer fully flushed — if remote already closed, session is done
+                if ($session->remote_closed && strlen($session->down_buffer) === 0) {
+                    delete_session($uuid);
                 }
             }
         }
@@ -298,6 +311,10 @@ while (true) {
         }
         // timeout
         if (time() - $session->up_buffer_last_copy > 30) {
+            delete_session($uuid);
+        }
+        // remote closed but down_buffer not drained within timeout (e.g. no downlink)
+        if ($session->remote_closed && time() - $session->remote_closed_time > 30) {
             delete_session($uuid);
         }
     }
