@@ -21,14 +21,18 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 define("LOGGING_MODE", "stderr");
 
+
 function logf(string $format, mixed ...$args): void {
+    static $stderr = null;
+    if ($stderr === null) $stderr = fopen('php://stderr', 'w');
+    
     $mode = defined('LOGGING_MODE') ? LOGGING_MODE : 'discard';
     if ($mode === 'discard') return;
 
     $message = sprintf($format, ...$args);
 
     if ($mode === 'stderr') {
-        fwrite(STDERR, $message);
+        fwrite($stderr, $message);
     } elseif ($mode === 'file') {
         file_put_contents(__DIR__ . '/xhttp.log', $message, FILE_APPEND | LOCK_EX);
     }
